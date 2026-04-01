@@ -1,0 +1,21 @@
+def search_all_jobs(query, city="", work_format="", extra=""):
+    results = {}
+
+    # 1. RSS (стабільно)
+    dou_jobs = search_rss_dou(query)
+    if dou_jobs:
+        results["DOU.ua"] = dou_jobs
+
+    djinni_jobs = search_djinni(query)
+    if djinni_jobs:
+        results["Djinni"] = djinni_jobs
+
+    # 2. 🔥 GOOGLE (ГОЛОВНЕ)
+    try:
+        google_jobs = search_google_jobs(query)
+        if google_jobs:
+            results["Google"] = google_jobs
+    except:
+        pass
+
+    return results

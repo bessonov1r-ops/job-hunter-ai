@@ -1,55 +1,76 @@
 import requests
 from bs4 import BeautifulSoup
+import re
+
+BASE_URL = "https://www.work.ua"
 
 
-def search_workua_jobs(query, city="Київ"):
+class Job:
+    def __init__(self, title, company, city, url, salary=""):
+        self.title = title
+        self.company = company
+        self.city = city
+        self.url = url
+        self.salary = salary
+
+
+def is_valid_job_link(href):
+    return href and re.match(r"^/jobs/\d+/?$", href)
+
+
+def get_workua_jobs(query="designer", city="kyiv"):
+    url = f"{BASE_URL}/jobs-{city}-{query}/"
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
+
     jobs = []
+    seen = set()
 
-    # 🔥 нормалізація міста (важливо для URL)
-    city_slug = city.lower().replace(" ", "-")
+    cards = soup.select("div.card")
 
-    # 🔥 формуємо URL
-    url = f"https://www.work.ua/jobs-{city_slug}-{query.replace(' ', '+')}/"
+    for card in cards:
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+        # 🔥 ВАЖЛИВО: шукаємо ВСІ <a> всередині карточки
+        links = card.find_all("a", href=True)
 
-    try:
-        response = requests.get(url, headers=headers, timeout=20)
+        job_link = None
+        title = ""
 
-        if response.status_code != 200:
-            print("Work.ua status:", response.status_code)
-            return []
+        for a in links:
+            href = a["href"]
 
-        soup = BeautifulSoup(response.text, "html.parser")
+            # беремо тільки /jobs/ID
+            if is_valid_job_link(href):
+                job_link = href
+                title = a.get_text(strip=True)
+                break
 
-        # 🔥 ключовий блок вакансій
-        vacancies = soup.find_all("div", class_="card")
+        if not job_link:
+            continue
 
-        for v in vacancies[:20]:
+        if job_link in seen:
+            continue
 
-            title_tag = v.find("h2")
-            link_tag = v.find("a", href=True)
-            company_tag = v.find("div", class_="add-top-xs")
-            location_tag = v.find("span", class_="text-muted")
+        seen.add(job_link)
 
-            title = title_tag.text.strip() if title_tag else ""
-            link = "https://www.work.ua" + link_tag["href"] if link_tag else ""
-            company = company_tag.text.strip() if company_tag else ""
-            location = location_tag.text.strip() if location_tag else city
+        full_url = BASE_URL + job_link
 
-            if title and link:
-                jobs.append({
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "link": link,
-                    "description": "",
-                    "source": "Work.ua"
-                })
+        company_tag = card.select_one("a.company")
+        company = company_tag.text.strip() if company_tag else ""
 
-    except Exception as e:
-        print("Work.ua error:", e)
+        city_tag = card.select_one("span.text-muted")
+        city_name = city_tag.text.strip() if city_tag else ""
 
-    return jobs
+        salary_tag = card.select_one("span.salary")
+        salary = salary_tag.text.strip() if salary_tag else ""
+
+        jobs.append(Job(title, company, city_name, full_url, salary))
+
+    print("WORK.UA LINKS:")
+    for j in jobs[:5]:
+        print(j.url)
+
+    return jobs[:5]

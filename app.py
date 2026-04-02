@@ -123,6 +123,19 @@ div[data-testid="stVerticalBlock"]>div { gap:4px !important; }
 /* ── MISC ── */
 hr { border-color:#334155 !important; }
 .stAlert { border-radius:8px !important; }
+
+/* ── kill phantom label above text_area / text_input ── */
+.stTextArea > label[data-testid="stWidgetLabel"],
+.stTextInput > label[data-testid="stWidgetLabel"] {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+/* ── tighten vertical gap inside containers ── */
+section[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] {
+    gap: 0px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -250,27 +263,25 @@ def render_chips(items, chip_class):
 # ============================================================
 if st.session_state.step == "input":
 
-    st.markdown("<div class='s-card'>", unsafe_allow_html=True)
-    st.markdown("<p class='sec-header'>Про себе</p>", unsafe_allow_html=True)
-    resume = st.text_area(
-        "",
-        placeholder="Sales Manager, 3 роки B2B, CRM... або просто 'фотограф', 'кухар', 'водій'",
-        height=140,
-        label_visibility="collapsed",
-    )
-    city = st.text_input("📍 Місто пошуку", "Київ")
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container():
+        st.markdown("<p class='sec-header'>Про себе</p>", unsafe_allow_html=True)
+        resume = st.text_area(
+            "resume",
+            placeholder="Sales Manager, 3 роки B2B, CRM... або просто 'фотограф', 'кухар', 'водій'",
+            height=140,
+            label_visibility="hidden",
+        )
+        city = st.text_input("📍 Місто пошуку", "Київ")
 
-    st.markdown("<div class='s-card'>", unsafe_allow_html=True)
-    st.markdown("<p class='sec-header'>Побажання</p>", unsafe_allow_html=True)
-    pc1, pc2, pc3 = st.columns(3)
-    with pc1:
-        salary = st.selectbox("💰 Зарплата", ["Не важливо", "$1000+", "$2000+", "$3000+"])
-    with pc2:
-        remote = st.selectbox("🏠 Формат", ["Не важливо", "Remote", "Office", "Hybrid"])
-    with pc3:
-        english = st.selectbox("🇬🇧 Англійська", ["Не важливо", "B1", "B2", "C1"])
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container():
+        st.markdown("<p class='sec-header'>Побажання</p>", unsafe_allow_html=True)
+        pc1, pc2, pc3 = st.columns(3)
+        with pc1:
+            salary = st.selectbox("💰 Зарплата", ["Не важливо", "$1000+", "$2000+", "$3000+"])
+        with pc2:
+            remote = st.selectbox("🏠 Формат", ["Не важливо", "Remote", "Office", "Hybrid"])
+        with pc3:
+            english = st.selectbox("🇬🇧 Англійська", ["Не важливо", "B1", "B2", "C1"])
 
 
     if st.button("🔍 Знайти вакансії", type="primary", use_container_width=True):
@@ -307,7 +318,6 @@ elif st.session_state.step == "clarify":
         st.session_state.step = "results"
         st.rerun()
 
-    st.markdown("<div class='s-card'>", unsafe_allow_html=True)
     st.markdown("<p class='sec-header'>Кілька уточнень</p>", unsafe_allow_html=True)
     st.markdown("<p style='color:#94a3b8;font-size:14px;margin-bottom:16px'>Це допоможе знайти точніші вакансії</p>",
                 unsafe_allow_html=True)
@@ -334,7 +344,6 @@ elif st.session_state.step == "clarify":
             st.session_state.step = "input"
             st.rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
 # КРОК 3 — РЕЗУЛЬТАТИ
@@ -579,8 +588,7 @@ elif st.session_state.step == "results":
     # ============================================================
     # FILTERS — always visible
     # ============================================================
-    st.markdown("<div class='s-card' style='margin-top:12px'>", unsafe_allow_html=True)
-    st.markdown("<p class='sec-header'>Фільтри</p>", unsafe_allow_html=True)
+    st.markdown("<p class='sec-header' style='margin-top:12px'>Фільтри</p>", unsafe_allow_html=True)
 
     _salary_opts = ["Не важливо", "$1000+", "$2000+", "$3000+"]
     _remote_opts = ["Не важливо", "Remote", "Office", "Hybrid"]
@@ -618,7 +626,6 @@ elif st.session_state.step == "results":
             _ptags_html += f"<span class='chip chip-pref-active'>{_pt}</span>"
         _ptags_html += "</div>"
         st.markdown(_ptags_html, unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     # ============================================================
     # СТАТИСТИКА
@@ -726,55 +733,72 @@ elif st.session_state.step == "results":
             act, act_col, top_sig = decision_hint(sc, reas, warns)
             reasons_html = "  ·  ".join(reas[:3]) if reas else ""
 
-            # ── Card header (always visible) ──
+            # ── Description inline ──
+            _desc_html = ""
+            if job.get("description"):
+                _desc_html = (
+                    f"<div style='color:#64748b;font-size:12px;margin:6px 0 0;"
+                    f"line-height:1.5'>{job['description'][:200].strip()}…</div>"
+                )
+            _warn_html = ""
+            if warns and sc < 40:
+                _warn_html = f"<div style='color:#f59e0b;font-size:11px;margin-top:4px'>⚠️ {' | '.join(warns[:2])}</div>"
+
+            # ── Link for Open button ──
+            _open_url  = link if (link and not bad_link) else None
+            _open_html = (f"<a href='{_open_url}' target='_blank' style='"
+                          f"color:#93c5fd;font-size:13px;font-weight:500;text-decoration:none'>"
+                          f"👉 Відкрити вакансію</a>") if _open_url else (
+                          f"<a href='{link}' target='_blank' style='"
+                          f"color:#64748b;font-size:13px;text-decoration:none'>"
+                          f"🔗 Спробувати</a>" if link else "")
+
+            # ── Full unified card — body + footer in one container ──
             st.markdown(f"""
-<div style="border:1px solid {card_brd};border-radius:12px;padding:12px 16px;
-background:#1e293b;margin-bottom:6px">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
-    <div style="flex:1;min-width:0">
-      <div style="font-weight:700;font-size:14px;color:#e5e7eb;margin-bottom:3px;
-           white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{job.get('title','Без назви')[:60]}</div>
-      <div style="color:#94a3b8;font-size:12px;margin-bottom:4px">
-        🏢 {job.get('company','-')[:35]}  ·  📍 {job.get('location','-')[:25]}  ·  🔎 {job.get('source','-')}</div>
-      <div style="color:#64748b;font-size:11px">{reasons_html}</div>
-    </div>
-    <div style="flex-shrink:0;text-align:right">
-      <span style="background:{badge_bg};color:white;padding:3px 10px;border-radius:20px;
-            font-size:12px;font-weight:600;display:block;margin-bottom:4px">Score {sc}</span>
-      <span style="background:#4f46e5;color:white;padding:2px 8px;border-radius:20px;
-            font-size:11px;display:block">{lbl}</span>
+<div style="border:1px solid {card_brd};border-radius:12px;
+     background:#1e293b;margin-bottom:10px;overflow:hidden">
+
+  <!-- body -->
+  <div style="padding:14px 16px 10px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:14px;color:#e5e7eb;
+             margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;
+             white-space:nowrap">{job.get('title','Без назви')[:65]}</div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:4px">
+          🏢 {job.get('company','-')[:35]}&nbsp;·&nbsp;📍 {job.get('location','-')[:25]}&nbsp;·&nbsp;🔎 {job.get('source','-')}</div>
+        <div style="color:#64748b;font-size:11px;margin-bottom:2px">{reasons_html}</div>
+        {_desc_html}{_warn_html}
+      </div>
+      <div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+        <span style="background:{badge_bg};color:white;padding:3px 10px;
+              border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap">Score {sc}</span>
+        <span style="background:#4f46e5;color:white;padding:2px 8px;
+              border-radius:20px;font-size:11px">{lbl}</span>
+      </div>
     </div>
   </div>
+
+  <!-- footer -->
+  <div style="border-top:1px solid #334155;padding:8px 16px;
+       display:flex;align-items:center;gap:8px;background:#1a2744">
+    {_open_html}
+  </div>
+
 </div>""", unsafe_allow_html=True)
 
-            # ── Inline description (no expander) ──
-            if job.get("description"):
-                _desc = job["description"][:220].strip()
-                st.markdown(
-                    f"<div style='color:#64748b;font-size:12px;margin:-4px 0 6px;line-height:1.5'>"
-                    f"{_desc}…</div>",
-                    unsafe_allow_html=True,
-                )
-            if warns and sc < 40:
-                st.caption("⚠️ " + " | ".join(warns[:2]))
-
-            # ── Card actions — one row ──
-            _ca1, _ca2, _ca3, _ca4 = st.columns([3, 1, 1, 1])
-            with _ca1:
-                if link and not bad_link:
-                    st.markdown(f"[👉 Відкрити вакансію]({link})")
-                elif link:
-                    st.markdown(f"[🔗 Спробувати]({link})")
-            with _ca2:
+            # ── Action buttons — Apply / Skip / Відгук ──
+            _ba1, _ba2, _ba3 = st.columns([1, 1, 1])
+            with _ba1:
                 if st.button("✅ Apply", key=f"ap_{i}"):
                     if link not in st.session_state.applied:
                         st.session_state.applied.append(link)
                     st.success("Додано")
-            with _ca3:
+            with _ba2:
                 if st.button("❌ Skip", key=f"sk_{i}"):
                     if link not in st.session_state.skipped:
                         st.session_state.skipped.append(link)
-            with _ca4:
+            with _ba3:
                 if st.button("✉️ Відгук", key=f"cov_btn_{i}"):
                     st.session_state[f"cov_{i}_open"] = not st.session_state.get(f"cov_{i}_open", False)
 

@@ -344,42 +344,15 @@ def filter_jobs_pipeline(jobs, profile, city, prefs=None, source_stats=None):
             if src in source_stats:
                 source_stats[src]["valid"] += 1
 
-    # 3. PREFERENCES
+    # 3. PREFERENCES (salary/remote only — soft, non-blocking)
     jobs = filter_by_preferences(jobs, prefs)
     stats["relevant"] = len(jobs)
 
-    # 4. ROLE MATCH — soft filter, single pass
-    # Each job evaluated once: strong (cluster match) or weak (no match)
-    # Broad mode: skip role filter entirely
-    is_broad = profile.get("search_mode") == "broad" or not profile.get("roles")
-    if is_broad:
-        stats["role_match"] = len(jobs)
-        stats["role_match_skipped"] = True
-    else:
-        strong, weak = [], []
-        for j in jobs:
-            if has_role_match(j, profile):
-                strong.append(j)
-            else:
-                j["_weak_role"] = True  # tag once, here, not in a second pass
-                weak.append(j)
-
-        if len(strong) >= 3:
-            jobs = strong
-            stats["role_match_fallback"] = False
-        else:
-            jobs = strong + weak[:20]
-            stats["role_match_fallback"] = True
-            stats["role_match_strong"] = len(strong)
-        stats["role_match"] = len(jobs)
-    stats["djinni_role"] = _djinni_count(jobs)
-
-    # 5. QUALITY FILTERS
-    # P1: NO fallback — if few jobs pass, return few jobs (not pre-filter garbage)
-    jobs = [j for j in jobs if is_not_excluded_role(j)]
-    jobs = [j for j in jobs if has_enough_description(j)]
-    jobs = [j for j in jobs if is_not_junior_mismatch(j, profile)]
-    stats["quality"] = len(jobs)
+    # Role/skill/quality filtering moved to scoring (build_smart_match).
+    # Pipeline keeps all valid jobs — scoring + soft floor in app.py does the selection.
+    stats["role_match"] = len(jobs)
+    stats["quality"]    = len(jobs)
+    stats["djinni_role"]  = _djinni_count(jobs)
     stats["djinni_final"] = _djinni_count(jobs)
 
     return jobs, stats

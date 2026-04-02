@@ -161,6 +161,22 @@ for key, val in {
 # ============================================================
 # HELPERS
 # ============================================================
+def clear_jobs_cache():
+    """Clear all job-related caches to force full pipeline rerun."""
+    for _k in ["jobs_cache", "raw_jobs_cache", "source_stats_cache", "filter_stats_cache"]:
+        st.session_state.pop(_k, None)
+
+
+def is_good_link(link):
+    if not link:
+        return False
+    link = link.lower().strip()
+    bad = ["search", "query=", "page=", "filter", "resume", "candidate", "cv"]
+    if any(p in link for p in bad):
+        return False
+    return link.count("/") >= 3
+
+
 def explain_match(job, profile, city):
     reasons, warnings = [], []
     text  = (job.get("title","") + " " + job.get("description","")).lower()
@@ -193,7 +209,7 @@ def explain_match(job, profile, city):
         warnings.append("⚠ Немає навичок")
     if not source or source.strip().lower() in ("","unknown"):
         warnings.append("⚠ Невідоме джерело")
-    if not link or "search" in link:
+    if not is_good_link(link):
         warnings.append("⚠ Підозрілий лінк")
 
     return reasons, warnings
@@ -208,6 +224,113 @@ def decision_hint(score, reasons, warnings):
     if score >= 70: return "✅ Хороший варіант — подавайся", "#22c55e", top
     if score >= 40: return "👀 Можливо — перевір деталі",   "#f59e0b", top
     return "⏭ Слабко — краще пропустити", "#64748b", top
+
+
+def build_smart_match(job, profile, city, score):
+    import re
+
+    text  = (job.get("title","") + " " + job.get("description","")).lower()
+    link  = job.get("link","")
+    level = profile.get("level","")
+    exp_years = int(profile.get("experience_years") or 0)
+
+    matches, risks = [], []
+    pts = 0
+    caps = []  # killer caps
+
+    # ── Role match (+50) ──
+    role_ok = has_role_match(job, profile)
+    if role_ok:
+        short = [ROLE_SHORT_NAMES.get(r, r) for r in profile.get("roles", [])]
+        matches.append(f"🎯 Роль збігається: {' / '.join(short[:2])}")
+        pts += 50
+    else:
+        if profile.get("roles"):
+            risks.append("⚠️ Інша роль — може не розглянути")
+        caps.append(40)  # killer: no role → max 40
+
+    # ── Skills match (+5 each, max 25) ──
+    user_skills = profile.get("skills", [])
+    matched_skills = [s for s in user_skills if skill_matches(s, text)]
+    n_matched = len(matched_skills)
+    n_total   = len(user_skills)
+    if n_matched:
+        skill_pts = min(n_matched * 5, 25)
+        pts += skill_pts
+        label = (f"🧠 {n_matched}/{n_total} ключових навичок збігаються"
+                 if n_total else f"🧠 Навички: {', '.join(matched_skills[:3])}")
+        matches.append(label)
+    else:
+        risks.append("⚠️ Немає ключових технологій у вакансії")
+        caps.append(50)  # killer: 0 skills → max 50
+
+    # ── City match (+10) ──
+    city_ok = is_relevant_city(job, city)
+    if city_ok:
+        loc = job.get("location","") or city
+        matches.append(f"📍 Локація підходить: {loc[:25]}")
+        pts += 10
+    else:
+        loc = job.get("location","")
+        if loc and city.lower() not in loc.lower() and "remote" not in loc.lower():
+            risks.append(f"📍 Не той регіон: {loc[:20]}")
+            pts -= 30   # penalty — lowers score but keeps job in results
+            caps.append(70)  # cap: wrong city can never beat local results
+
+    # ── Level match (+10) ──
+    if level and level.lower() in text:
+        matches.append(f"📊 Рівень підходить: {level.capitalize()}")
+        pts += 10
+
+    # ── Experience match (+5/+10/+15) ──
+    exp_m = re.search(r'(\d+)\+?\s*(?:years?|років|рік|year)', text)
+    if exp_m:
+        req = int(exp_m.group(1))
+        if exp_years >= req:
+            bonus = 15 if req >= 5 else 10 if req >= 3 else 5
+            pts += bonus
+            matches.append(f"🕐 Досвід підходить: {exp_years}р ≥ {req}р вимог")
+        else:
+            risks.append(f"⚠️ Недостатньо досвіду: потрібно {req}р, є {exp_years}р")
+
+    # ── Stack bonus (+10) ──
+    stack_kw = ["crm", "b2b", "saas", "sales", "pipeline", "lead"]
+    if any(k in text for k in stack_kw) and any(skill_matches(s, text) for s in user_skills):
+        pts += 10
+        matches.append("⚡ Стек збігається з вакансією")
+
+    # ── Source quality boost (+5 for trusted UA sources) ──
+    if job.get("source") in ("DOU", "Djinni"):
+        pts += 5
+
+    # ── Bad link penalty / cap ──
+    bad_link = not is_good_link(link)
+    if bad_link:
+        risks.append("⚠️ Проблема з посиланням")
+        caps.append(60)
+
+    # ── Apply killer caps, then clamp 0–100 ──
+    confidence = max(0, min(100, pts))
+    if caps:
+        confidence = min(confidence, min(caps))
+
+    # ── Summary = business decision ──
+    if confidence >= 80:
+        summary, summary_color = "🔥 Подаватися зараз — сильний матч", "#22c55e"
+    elif confidence >= 60:
+        summary, summary_color = "✅ Хороший варіант — варто спробувати", "#4ade80"
+    elif confidence >= 40:
+        summary, summary_color = "👀 Перевірити деталі перед відгуком", "#f59e0b"
+    else:
+        summary, summary_color = "⏭ Не витрачати час — слабкий матч", "#64748b"
+
+    return {
+        "matches":       matches[:4],
+        "risks":         risks[:3],
+        "summary":       summary,
+        "summary_color": summary_color,
+        "confidence":    confidence,
+    }
 
 
 def generate_cover(job, profile, style="medium"):
@@ -266,10 +389,10 @@ if st.session_state.step == "input":
     with st.container():
         st.markdown("<p class='sec-header'>Про себе</p>", unsafe_allow_html=True)
         resume = st.text_area(
-            "resume",
+            "",
             placeholder="Sales Manager, 3 роки B2B, CRM... або просто 'фотограф', 'кухар', 'водій'",
             height=140,
-            label_visibility="hidden",
+            label_visibility="collapsed",
         )
         city = st.text_input("📍 Місто пошуку", "Київ")
 
@@ -354,11 +477,16 @@ elif st.session_state.step == "results":
     prefs   = st.session_state.get("preferences", {})
 
     # ---- RAW JOBS CACHE ----
+    # If raw cache is gone, scored cache must also be rebuilt
     if "raw_jobs_cache" not in st.session_state:
+        st.session_state.pop("jobs_cache", None)
         with st.spinner("🔍 Збираємо вакансії..."):
             raw_jobs, source_stats = collect_jobs(profile, city)
         geo = [j for j in raw_jobs if is_relevant_city(j, city)]
-        if len(geo) >= 5: raw_jobs = geo
+        if geo:
+            raw_jobs = geo
+        else:
+            raw_jobs = raw_jobs[:50]
 
         def _norm(url):
             url = (url or "").strip().lower()
@@ -390,11 +518,14 @@ elif st.session_state.step == "results":
 
         for j in filtered:
             r, w = explain_match(j, profile, city)
-            sd = smart_score(j, profile, r, w, city)
-            j["final_score"] = sd["score"]
-            j["label"]       = sd["label"]
+            sd = smart_score(j, profile, r, w, city)   # base signal
+            sm = build_smart_match(j, profile, city, sd["score"])
+            j["final_score"] = sm["confidence"]
+            j["label"]       = sm["summary"]
+            j["smart"]       = sm
 
-        jobs = sorted(filtered, key=lambda x: x.get("final_score",0), reverse=True)[:50]
+        jobs = sorted(filtered, key=lambda x: x.get("final_score",0), reverse=True)
+        jobs = [j for j in jobs if j.get("final_score", 0) >= 30][:100]
         for j in jobs:
             src = j.get("source","Other")
             if isinstance(source_stats.get(src), dict):
@@ -473,7 +604,7 @@ elif st.session_state.step == "results":
                     if st.button(_er, key=f"empty_{_er}", use_container_width=True):
                         profile["roles"] = [_er]
                         st.session_state.profile = profile
-                        st.session_state.pop("jobs_cache", None)
+                        clear_jobs_cache()
                         st.rerun()
 
         col1, col2, col3 = st.columns([2, 2, 1])
@@ -491,7 +622,7 @@ elif st.session_state.step == "results":
                                 roles.remove(_r)
                                 profile["roles"] = roles
                                 st.session_state.profile = profile
-                                st.session_state.pop("jobs_cache", None)
+                                clear_jobs_cache()
                                 st.rerun()
 
             # Add via Enter
@@ -503,7 +634,7 @@ elif st.session_state.step == "results":
                     st.session_state.profile = profile
                     st.session_state["role_input"] = ""
                     st.session_state["_role_added"] = _v
-                    st.session_state.pop("jobs_cache", None)
+                    clear_jobs_cache()
             st.text_input("", key="role_input",
                           placeholder="+ роль  (Enter)",
                           label_visibility="collapsed",
@@ -545,7 +676,7 @@ elif st.session_state.step == "results":
                                 skills.remove(_s)
                                 profile["skills"] = skills
                                 st.session_state.profile = profile
-                                st.session_state.pop("jobs_cache", None)
+                                clear_jobs_cache()
                                 st.rerun()
 
             # Add via Enter
@@ -557,7 +688,7 @@ elif st.session_state.step == "results":
                     st.session_state.profile = profile
                     st.session_state["skill_input"] = ""
                     st.session_state["last_added_skill"] = _v
-                    st.session_state.pop("jobs_cache", None)
+                    clear_jobs_cache()
             st.text_input("", key="skill_input",
                           placeholder="+ додати навичку (Enter)",
                           label_visibility="collapsed",
@@ -582,7 +713,7 @@ elif st.session_state.step == "results":
 
         if profile_changed:
             st.session_state.profile = profile
-            st.session_state.pop("jobs_cache", None)
+            clear_jobs_cache()
             st.rerun()
 
     # ============================================================
@@ -612,7 +743,7 @@ elif st.session_state.step == "results":
         prefs["salary"] = new_sal
         prefs["remote"] = new_rem
         st.session_state.preferences = prefs
-        st.session_state.pop("jobs_cache", None)
+        clear_jobs_cache()
         st.rerun()
 
     # Fix 9: active pref chips
@@ -668,7 +799,7 @@ elif st.session_state.step == "results":
     if not jobs:
         st.warning("😕 Вакансій не знайдено. Спробуй змінити критерії.")
         if st.button("← Змінити критерії"):
-            st.session_state.pop("jobs_cache",None)
+            clear_jobs_cache()
             st.session_state.step = "input"
             st.rerun()
     elif len(jobs) < 5:
@@ -713,18 +844,16 @@ elif st.session_state.step == "results":
         st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
         st.markdown(f"<p class='sec-header'>Всі вакансії ({len(jobs)})</p>", unsafe_allow_html=True)
 
-        valid_jobs = [j for j in jobs if j.get("link") and j["link"].count("/") >= 3]
+        valid_jobs = [j for j in jobs if is_good_link(j.get("link",""))]
         if len(valid_jobs) >= 5: jobs = valid_jobs
 
         show_top = st.toggle("⭐ Тільки топ (70%+)", value=False)
         disp = [j for j in jobs if j["final_score"]>=70] if show_top else jobs
 
-        bad_pats = ["search","jobs?","vacancies?","page=","query=","filter","resume","candidate","cv"]
-
         for i, job in enumerate(disp):
             sc       = job.get("final_score", 0)
             link     = job.get("link", "")
-            bad_link = not link or any(p in link.lower() for p in bad_pats) or link.count("/")<3
+            bad_link = not is_good_link(link)
             badge_bg = "#22c55e" if sc>=70 else "#f59e0b" if sc>=40 else "#64748b"
             card_brd = "#22c55e44" if sc>=70 else "#f59e0b44" if sc>=40 else "#334155"
             lbl      = job.get("label","—")
@@ -732,6 +861,60 @@ elif st.session_state.step == "results":
             reas, warns = explain_match(job, profile, city)
             act, act_col, top_sig = decision_hint(sc, reas, warns)
             reasons_html = "  ·  ".join(reas[:3]) if reas else ""
+            sm = job.get("smart") or build_smart_match(job, profile, city, sc)
+
+            # ── Smart Match 2.0 HTML block ──
+            _conf     = sm["confidence"]
+            _sm_bg    = "#0a2218" if _conf>=60 else "#261a04" if _conf>=40 else "#161c2a"
+            _sm_brd   = "#22c55e" if _conf>=60 else "#f59e0b" if _conf>=40 else "#334155"
+            _bar_fill = "#22c55e" if _conf>=60 else "#f59e0b" if _conf>=40 else "#475569"
+
+            _m_rows = "".join(
+                f"<div style='color:#86efac;font-size:12.5px;line-height:1.8;padding-left:2px'>"
+                f"&bull;&nbsp;{m}</div>"
+                for m in sm["matches"]
+            )
+            _r_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:12.5px;line-height:1.8;padding-left:2px'>"
+                f"&bull;&nbsp;{r}</div>"
+                for r in sm["risks"]
+            )
+            _m_block = (
+                f"<div style='margin-bottom:8px'>"
+                f"<div style='color:#4ade80;font-size:11px;font-weight:700;"
+                f"text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px'>"
+                f"🟢 Чому підходить</div>{_m_rows}</div>"
+            ) if _m_rows else ""
+            _r_block = (
+                f"<div style='margin-bottom:8px'>"
+                f"<div style='color:#fbbf24;font-size:11px;font-weight:700;"
+                f"text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px'>"
+                f"⚠️ Ризики</div>{_r_rows}</div>"
+            ) if _r_rows else ""
+
+            _sm_html = (
+                f"<div style='background:{_sm_bg};border:1px solid {_sm_brd}66;"
+                f"border-left:3px solid {_sm_brd};border-radius:10px;"
+                f"padding:12px 14px;margin-top:10px'>"
+
+                # confidence badge + progress bar
+                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px'>"
+                f"<span style='background:#1e293b;color:#e5e7eb;padding:3px 10px;"
+                f"border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap'>"
+                f"Match: {_conf}%</span>"
+                f"<div style='flex:1;height:5px;background:#1e293b;border-radius:3px;overflow:hidden'>"
+                f"<div style='width:{_conf}%;height:100%;background:{_bar_fill};"
+                f"border-radius:3px;transition:width .3s'></div></div></div>"
+
+                # matches + risks
+                f"{_m_block}{_r_block}"
+
+                # summary
+                f"<div style='border-top:1px solid {_sm_brd}33;padding-top:8px;margin-top:2px'>"
+                f"<span style='color:{sm['summary_color']};font-size:13px;font-weight:700'>"
+                f"💡 {sm['summary']}</span></div>"
+                f"</div>"
+            )
 
             # ── Description inline ──
             _desc_html = ""
@@ -764,11 +947,12 @@ elif st.session_state.step == "results":
       <div style="flex:1;min-width:0">
         <div style="font-weight:700;font-size:14px;color:#e5e7eb;
              margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;
-             white-space:nowrap">{job.get('title','Без назви')[:65]}</div>
+             white-space:nowrap">{('🔥 ' if sc >= 80 else '') + job.get('title','Без назви')[:65]}</div>
         <div style="color:#94a3b8;font-size:12px;margin-bottom:4px">
           🏢 {job.get('company','-')[:35]}&nbsp;·&nbsp;📍 {job.get('location','-')[:25]}&nbsp;·&nbsp;🔎 {job.get('source','-')}</div>
         <div style="color:#64748b;font-size:11px;margin-bottom:2px">{reasons_html}</div>
         {_desc_html}{_warn_html}
+        {_sm_html}
       </div>
       <div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:flex-end">
         <span style="background:{badge_bg};color:white;padding:3px 10px;
